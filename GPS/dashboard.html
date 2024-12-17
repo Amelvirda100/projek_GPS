@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Peta Lokasi</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css">
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-routing-machine/3.2.12/leaflet-routing-machine.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f4;
+        }
+
+        #map {
+            height: 500px;
+            width: 100%;
+        }
+
+        .container {
+            padding: 20px;
+        }
+
+        .btn-container {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+        }
+
+        button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            font-size: 14px;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        #route-info {
+            margin-top: 20px;
+            background-color: #ffffff;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .selected-marker {
+            background-color: yellow;
+            border: 2px solid #ff9800;
+            padding: 5px;
+            border-radius: 50%;
+            font-weight: bold;
+        }
+        .back-btn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    padding: 10px 20px;
+    background-color: #ff5722;
+    color: white;
+    font-size: 14px;
+    border: none;
+    cursor: pointer;
+    border-radius: 5px;
+}
+
+.back-btn:hover {
+    background-color: #e64a19;
+}
+
+    </style>
+</head>
+<body>
+    <a href="login.php">
+        <button class="back-btn">Kembali ke Login</button>
+    </a>
+    <div class="container">
+        <h1>Peta Lokasi SPBU dan Bengkel</h1>
+        <p>Pilih dua titik pada peta untuk menghitung jarak dan rute.</p>
+        <div id="map"></div>
+        <div class="btn-container">
+            <button id="calculate-route" disabled>Hitung Rute</button>
+            <button id="reset-route" disabled>Reset</button>
+        </div>
+        <div id="route-info" style="display:none;">
+            <h3>Rute yang Dihitung</h3>
+            <p id="distance-result">Jarak: -</p>
+            <p id="time-result">Estimasi Waktu: -</p>
+            <h4>Petunjuk Arah:</h4>
+            <div id="directions"></div>
+        </div>
+        
+    </div>
+
+    <script>
+        // Inisialisasi peta
+        const map = L.map('map').setView([-7.7956, 110.3695], 13);
+
+        // Tambahkan Tile Layer
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        // Definisikan ikon hijau
+        const greenIcon = L.icon({
+            iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x-green.png',
+            iconSize: [25, 41],
+            iconAnchor: [12, 41],
+            popupAnchor: [1, -34],
+        });
+
+        let selectedMarkers = [];
+        let routingControl;
+
+        // Tombol
+        const calculateButton = document.getElementById('calculate-route');
+        const resetButton = document.getElementById('reset-route');
+        const distanceResult = document.getElementById('distance-result');
+        const timeResult = document.getElementById('time-result');
+        const routeInfo = document.getElementById('route-info');
+        const directionsDiv = document.getElementById('directions');
+
+        // Fungsi untuk menambahkan marker dari database
+        function addMarkerFromDatabase(lat, lng, name, address) {
+            const marker = L.marker([lat, lng], { icon: greenIcon }).addTo(map);
+            marker.bindPopup(`<b>${name}</b><br>${address}`);
+
+            marker.on('click', function () {
+                if (selectedMarkers.length < 2) {
+                    selectedMarkers.push([lat, lng]);
+
+                    // Ganti ikon untuk marker yang dipilih
+                    marker.setIcon(L.icon({
+                        iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+                        iconSize: [30, 46],
+                        iconAnchor: [15, 46],
+                        popupAnchor: [1, -40]
+                    }));
+
+                    marker.bindPopup(`<b>${name}</b><br>Dipilih`).openPopup();
+
+                    // Feedback UI: Update marker dengan warna lain untuk menunjukkan pemilihan
+                    marker.getElement().classList.add('selected-marker');
+
+                    if (selectedMarkers.length === 2) {
+                        calculateButton.disabled = false;
+                    }
+                }
+            });
+        }
+
+        // Fetch Data dari Database
+        fetch('get_locations.php')
+            .then(response => response.json())
+            .then(data => {
+                if (data.length > 0) {
+                    data.forEach(location => {
+                        addMarkerFromDatabase(location.lat, location.lng, location.namalokasi, location.alamat);
+                    });
+                } else {
+                    alert("Tidak ada data lokasi di database.");
+                }
+            })
+            .catch(error => console.error('Gagal memuat data:', error));
+
+        // Fungsi untuk menghitung rute dan menampilkan hasil di bawah peta
+        calculateButton.addEventListener('click', () => {
+            if (selectedMarkers.length === 2) {
+                const [pointA, pointB] = selectedMarkers;
+
+                // Hapus rute sebelumnya jika ada
+                if (routingControl) {
+                    map.removeControl(routingControl);
+                }
+
+                routingControl = L.Routing.control({
+                    waypoints: [
+                        L.latLng(pointA[0], pointA[1]),
+                        L.latLng(pointB[0], pointB[1])
+                    ],
+                    routeWhileDragging: true,
+                    createMarker: function() { return null; }  // Tidak menampilkan marker tambahan
+                }).on('routesfound', function(e) {
+                    const route = e.routes[0];
+                    const distance = route.summary.totalDistance / 1000; // convert to km
+                    const time = route.summary.totalTime / 60; // convert to minutes
+
+                    // Update jarak dan waktu
+                    distanceResult.textContent = `Jarak: ${distance.toFixed(2)} km`;
+                    timeResult.textContent = `Estimasi Waktu: ${time.toFixed(0)} menit`;
+
+                    // Menampilkan petunjuk arah di bawah peta
+                    directionsDiv.innerHTML = '';
+                    route.instructions.forEach((instruction, index) => {
+                        const directionElement = document.createElement('p');
+                        directionElement.textContent = `${index + 1}. ${instruction.text}`;
+                        directionsDiv.appendChild(directionElement);
+                    });
+
+                    // Tampilkan info rute
+                    routeInfo.style.display = 'block';
+                }).addTo(map);
+
+                // Mengaktifkan tombol Reset
+                resetButton.disabled = false;
+                calculateButton.disabled = true;
+            }
+        });
+
+        // Reset Marker dan Rute
+        resetButton.addEventListener('click', () => {
+            selectedMarkers = [];
+            if (routingControl) {
+                map.removeControl(routingControl);
+            }
+            resetButton.disabled = true;
+            routeInfo.style.display = 'none';
+            distanceResult.textContent = "Jarak: -";
+            timeResult.textContent = "Estimasi Waktu: -";
+        });
+
+        // Fungsi untuk menghitung jarak antara dua titik
+        function calculateDistance(lat1, lng1, lat2, lng2) {
+            const R = 6371; // Radius bumi dalam kilometer
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lng2 - lng1) * Math.PI / 180;
+            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return R * c; // Hasil dalam kilometer
+        }
+    </script>
+</body>
+</html>
